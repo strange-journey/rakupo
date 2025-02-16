@@ -67,14 +67,14 @@ sub deploy(IO() $deploy-path, @containers)
     # deploy etc directory
     if './etc'.IO ~~ :d {
         copy-tree './etc', $build-path;
-        find($build-path.add('etc'), :type('f'))>>.&substitute-config-tokens;
+        find($build-path.add('etc'), :type('f'))>>.&{ try { $_.spurt(substitute-config-tokens $_.slurp) } };
     }
 
     # deploy images needed locally
     copy-tree './images', $build-path if './images'.IO ~~ :d;
 
     # generate the production docker compose file
-    my $compose = load-yaml($default-compose-file.IO.slurp);
+    my $compose = load-yaml(substitute-config-tokens $default-compose-file.IO.slurp);
     for $compose<services>.kv -> $key, $service {
         $compose<services>{$key} = %setup-container-compose{$key}($service);
             
@@ -82,26 +82,30 @@ sub deploy(IO() $deploy-path, @containers)
             for $compose<services>{$key}<volumes><> {
                 when Str {
                     my $volume = $_.split(':');
-                    $_ = (slip fix-relative-path($volume[0], $build-path).Str, $volume[1..*]).join(':');
+                    $_ = (fix-relative-path($volume[0], $deploy-path).Str, |$volume[1..*]).join(':');
                 }
                 when Hash {
-                    if $_<source>:exists { $_<source> = fix-relative-path($_<source>, $build-path).Str; }
+                    if $_<source>:exists { $_<source> = fix-relative-path($_<source>, $deploy-path).Str; }
                 };
             }
         }
     }
 
-    # create any missing secrets
-    my $secrets-path = $build-path.add('secrets');
-    mkdir $secrets-path if $secrets-path !~~ :d;
+    # TODO: create any missing secrets
+    # for now, just assume they exist... later, warn that they don't exist in deploy?
+    # my $secrets-path = $build-path.add('secrets');
+    # mkdir $secrets-path if $secrets-path !~~ :d;
     for $compose<secrets>.kv -> $key, $secret {
-        my $secret-path = $secrets-path.add($key);
-        if $secret-path !~~ :f {
-            $secret-path.spurt: ('a'..'z', 'A'..'Z', 0..9).flat.roll(64).join;
-            $secret-path.chmod: 0o600;
-        }
-        $compose<secrets>{$key}<file> = $secret-path.resolve.Str;
+        # my $secret-path = $secrets-path.add($key);
+
+        # this will never exist in the build dir...
+        # if $secret-path !~~ :f {
+        #     $secret-path.spurt: ('a'..'z', 'A'..'Z', 0..9).flat.roll(64).join;
+        #     $secret-path.chmod: 0o600;
+        # }
+        $compose<secrets>{$key}<file> = $deploy-path.add("secrets/$key").resolve.Str;
     }
+
 
     $build-path.add($default-compose-prod-file).spurt: save-yaml($compose);
 
@@ -142,25 +146,34 @@ sub fix-relative-path(IO() $path, IO() $base) {
 }
 
 sub setup-container($container, IO() :$var-path) {
-    say "setting up container $container";
+    $*ERR.say("setting up container $container");
     given $container {
-        sub add-var(*@args) {
-            for %(@args).kv -> $path, $type {
-                given $type {
-                    when 'd' { mkdir $var-path.add($path); }
-                    when 'f' { mkdir $var-path.add($path.IO.parent); $var-path.add($path).open(:a).close; }
-                    default { die "unknown var type $type" }
-                }
+        multi add-var($path, $type) {
+            my $out-path = $var-path.add($path);
+            given $type {
+                when 'd' { mkdir $out-path; }
+                when 'f' { mkdir $var-path.add($path.IO.parent); $out-path.open(:a).close; }
+                default { die "unknown var type $type" }
+            }
+            $out-path;
+        }
+        multi add-var($path, $type, $mode) {
+            my $out-path = add-var($path, $type);
+            $out-path.chmod($mode);
+            $out-path;
+        }
+        sub add-vars(*@args) {
+            for %(@args).kv -> $path, $args {
+                add-var $path, |$args;
             }
         }
-        
         when 'postgres' || 'redis' || 'diun' || 'lldap' {
-            add-var <<"$_/data" d>>;
+            add-var "$_/data", 'd';
         }
         
-        when 'traefik' { add-var <<"$_/acme.json" f>>; }
-        when 'rutorrent' { add-var <<"$_/data" d "$_/passwd" d>>; }
-        when 'jellyfin' { add-var <<"$_/config" d "$_/cache" d>>; }
+        when 'traefik' { add-var "$_/acme.json", 'f', 0o600; }
+        when 'rutorrent' { add-vars <<"$_/data" d "$_/passwd" d>>; }
+        when 'jellyfin' { add-vars <<"$_/config" d "$_/cache" d>>; }
         
         # TODO: authelia
         
@@ -172,7 +185,7 @@ sub setup-container($container, IO() :$var-path) {
         # is it possible to spin up a docker container of filebrowser to generate a database.db with the existing config,
         # then modify in raku to get a working db (add users, fix proxy auth)?
 
-        default { add-var <<"$_" d>> }
+        default { add-var "$_", 'd'; }
     }
 
     my $uid = %config<uid>;
@@ -197,6 +210,11 @@ sub setup-container($container, IO() :$var-path) {
                 $_
             }
         }
+
+        # containers that need to run as root
+        when 'socket-proxy' {
+           $container => { $_ }
+        }
         
         # TODO: add diun labels to all services here
         default {
@@ -213,25 +231,27 @@ sub load-config(:$config-file = $default-config-file) {
     %config = load-yaml($config-file.IO.slurp);
 }
 
-sub substitute-config-tokens(IO() $path) {
+sub substitute-config-tokens(Str $text) {
+    my $out = $text;
     try {
-        my $text = $path.IO.slurp;
-        say "substituting tokens in $path";
         for %config.kv -> $key, $value {
-            $text ~~ s:g/\<\<\s*$key\s*\>\>/$value/;
+            $out ~~ s:g/\<\<\s*$key\s*\>\>/$value/;
         }
-        $path.IO.spurt: $text;
     }
+    $out
 }
 
 sub copy-tree(IO() $source, IO() $dest) {
+    $*ERR.say("copying $source to $dest");
     if $source ~~ :f {
         $source.copy($dest ~~ :d ?? $dest.add($source.basename) !! $dest);
         return;
     }
 
     if $source ~~ :l {
-        symlink $source.resolve, $dest ~~ :d ?? $dest.add($source.basename) !! $dest;
+        my $link = $dest ~~ :d ?? $dest.add($source.basename) !! $dest;
+        unlink $link if $link ~~ :l;
+        symlink $source.resolve, $link;
         return;
     }
 
@@ -254,18 +274,8 @@ multi find(IO() $path, Int:D $depth, Str:D :$type = 'a', Int:D :$mindepth = 0) {
     |do given $path {
         when :l { $type ~~ 'a'|'l' ?? ($path) !! () }
         when :f { $type ~~ 'a'|'f' ?? ($path) !! () }
-        when :d { |($type ~~ 'a'|'d' and $depth > $mindepth ?? ($path) !! ()), |$path.dir>>.&find($depth + 1, :$type, :$mindepth) }
-        default { say () }
-    }
-}
-
-sub check-sudo()
-{
-    my $proc = run <docker ps>;
-    if !$proc {
-        if prompt('run with sudo? [y/n] ') eq 'y' {
-            say 'run sudo';
-        }
+        when :d { |($type ~~ 'a'|'d' && $depth >= $mindepth ?? ($path) !! ()), |$path.dir>>.&find($depth + 1, :$type, :$mindepth) }
+        default { () }
     }
 }
 

@@ -48,7 +48,7 @@ services:
     restart: unless-stopped
   
   postgres:
-    image: postgres:17.3-alpine
+    image: postgres:15.1-alpine
     environment:
       - POSTGRES_PASSWORD_FILE=/run/secrets/postgres-pass
     labels:
@@ -193,20 +193,20 @@ services:
       - "./var/diun/data:/data"
       - "./etc/diun/diun.yml:/diun.yml:ro"
     restart: unless-stopped
-      
-  kupo-utils:
-    image: moogle/kupo-utils
-    build: ./images/kupo-utils
-    environment:
-      - PYRO_RTORRENT_RC=/rutorrent/rtorrent/.rtorrent.rc
-      - PYRO_SCGI_URL=http://rutorrent:8000
-    networks:
-      - rtorrent
-    volumes:
-      - "./var/rutorrent/data:/rutorrent:ro"
-      - "./data/media/import/shoko:/shoko"
-      - "./data/media/library/anime_movies:/shoko_movie"
-    restart: unless-stopped
+
+  # kupo-utils:
+  #   image: moogle/kupo-utils
+  #   build: ./images/kupo-utils
+  #   environment:
+  #     - PYRO_RTORRENT_RC=/rutorrent/rtorrent/.rtorrent.rc
+  #     - PYRO_SCGI_URL=http://rutorrent:8000
+  #   networks:
+  #     - rtorrent
+  #   volumes:
+  #     - "./var/rutorrent/data:/rutorrent:ro"
+  #     - "./data/media/import/shoko:/shoko"
+  #     - "./data/media/library/anime_movies:/shoko_movie"
+  #   restart: unless-stopped
   
   rutorrent:
     image: crazymax/rtorrent-rutorrent:5.1.5-7.2
