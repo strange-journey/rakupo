@@ -48,28 +48,31 @@ multi sub MAIN('log',
     Str $container
 ) { }
 
-sub deploy(IO() $deploy_path, @containers)
+sub deploy(IO() $deploy-path, @containers)
 {
     use YAMLish;
-    
-    if $deploy_path !~~ :d { die 'invalid deploy path specified!'; }
-    
+    if $deploy-path !~~ :d { die 'invalid deploy path specified!'; }
+
+    # setup working temp dir
+    my $build-path = $*TMPDIR.add("rakupo-{now.to-posix[0].int}");
+    my $var-path = $build-path.add('var');
+
     # setup containers and build hash of methods to override compose file
-    my %setup-container-compose = @containers>>.&setup-container;
+    my %setup-container-compose = @containers>>.&{ setup-container $_, :$var-path }
 
     # create data symlink
-    my $data-symlink = $deploy_path.add('data');
-    unlink $data-symlink if $data-symlink ~~ :l;
+    my $data-symlink = $build-path.add('data');
     symlink %config<data_path>, $data-symlink;
 
     # deploy etc directory
     if './etc'.IO ~~ :d {
-        copy-tree './etc', $deploy_path;
-        find($deploy_path.add('etc'), :type('f'))>>.&substitute-config-tokens;
+        copy-tree './etc', $build-path;
+        find($build-path.add('etc'), :type('f'))>>.&substitute-config-tokens;
     }
 
     # deploy images needed locally
-    copy-tree './images', $deploy_path if './images'.IO ~~ :d;
+    copy-tree './images', $build-path if './images'.IO ~~ :d;
+
     # generate the production docker compose file
     my $compose = load-yaml($default-compose-file.IO.slurp);
     for $compose<services>.kv -> $key, $service {
@@ -79,17 +82,17 @@ sub deploy(IO() $deploy_path, @containers)
             for $compose<services>{$key}<volumes><> {
                 when Str {
                     my $volume = $_.split(':');
-                    $_ = (slip fix-relative-path($volume[0]).Str, $volume[1..*]).join(':');
+                    $_ = (slip fix-relative-path($volume[0], $build-path).Str, $volume[1..*]).join(':');
                 }
                 when Hash {
-                    if $_<source>:exists { $_<source> = fix-relative-path($_<source>).Str; }
+                    if $_<source>:exists { $_<source> = fix-relative-path($_<source>, $build-path).Str; }
                 };
             }
         }
     }
 
     # create any missing secrets
-    my $secrets-path = $deploy_path.add('secrets');
+    my $secrets-path = $build-path.add('secrets');
     mkdir $secrets-path if $secrets-path !~~ :d;
     for $compose<secrets>.kv -> $key, $secret {
         my $secret-path = $secrets-path.add($key);
@@ -100,8 +103,13 @@ sub deploy(IO() $deploy_path, @containers)
         $compose<secrets>{$key}<file> = $secret-path.resolve.Str;
     }
 
-    $deploy_path.add($default-compose-prod-file).spurt: save-yaml($compose);
-    find($deploy_path)>>.&{ $_.chown(:uid(%config<uid>) :gid(%config<gid>)) };
+    $build-path.add($default-compose-prod-file).spurt: save-yaml($compose);
+
+    # copy to deploy path
+    $build-path.dir>>.&{ copy-tree $_, $deploy-path }
+    find($deploy-path)>>.&{ $_.chown(:uid(%config<uid>) :gid(%config<gid>)) };
+
+    # TODO: options to backup deploy path, and to delete build-path?
 
     my $proc = run <docker network ls --format {{.Name}}>, :out;
     for $compose<networks> (-) $proc.out.slurp(:close).lines {
@@ -129,18 +137,18 @@ sub validate-containers(*@containers) {
     @containers || @all-containers
 }
 
-sub fix-relative-path(IO() $path, IO() :$base = %config<deploy_path>.IO --> IO::Path) {
+sub fix-relative-path(IO() $path, IO() $base) {
     ($path ~~ /^\.\.?(\/+.*)?$/ ?? $base.add($path) !! $path).resolve;
 }
 
-sub setup-container($container) {
+sub setup-container($container, IO() :$var-path) {
     say "setting up container $container";
     given $container {
-        sub add-var(*@args, IO() :$varpath = %config<deploy_path>.IO.add('var')) {
+        sub add-var(*@args) {
             for %(@args).kv -> $path, $type {
                 given $type {
-                    when 'd' { mkdir $varpath.add($path); }
-                    when 'f' { mkdir $varpath.add($path.IO.parent); $varpath.add($path).open(:a).close; }
+                    when 'd' { mkdir $var-path.add($path); }
+                    when 'f' { mkdir $var-path.add($path.IO.parent); $var-path.add($path).open(:a).close; }
                     default { die "unknown var type $type" }
                 }
             }
@@ -200,16 +208,6 @@ sub setup-container($container) {
     }
 };
 
-sub create-vars(*@args, IO() :$varpath = %config<deploy_path>.IO.add('var')) {
-    for %(@args).kv -> $path, $type {
-        given $type {
-            when 'd' { mkdir $varpath.add($path); }
-            when 'f' { mkdir $varpath.add($path.IO.parent); $varpath.add($path).open(:a).close; }
-            default { die "unknown var type $type" }
-        }
-    }
-}
-
 sub load-config(:$config-file = $default-config-file) {
     use YAMLish;
     %config = load-yaml($config-file.IO.slurp);
@@ -227,13 +225,13 @@ sub substitute-config-tokens(IO() $path) {
 }
 
 sub copy-tree(IO() $source, IO() $dest) {
-    if $source ~~ :f and $dest !~~ :d {
-        $source.copy($dest);
+    if $source ~~ :f {
+        $source.copy($dest ~~ :d ?? $dest.add($source.basename) !! $dest);
         return;
     }
 
-    if $source ~~ :f and $dest ~~ :d {
-        $source.copy($dest.add($source.basename));
+    if $source ~~ :l {
+        symlink $source.resolve, $dest ~~ :d ?? $dest.add($source.basename) !! $dest;
         return;
     }
 
@@ -251,11 +249,12 @@ sub copy-tree(IO() $source, IO() $dest) {
     }
 }
 
-sub find(IO() $path, Str :$type = 'a') {
+multi find(IO() $path, Str:D :$type = 'a', Int :$mindepth = 0) { find $path, 0, :$type, :$mindepth; }
+multi find(IO() $path, Int:D $depth, Str:D :$type = 'a', Int:D :$mindepth = 0) {
     |do given $path {
-        when :d { |($type ~~ 'a'|'d' ?? ($path) !! ()), |$path.dir>>.&find(:$type) }
-        when :f { $type ~~ 'a'|'f' ?? ($path) !! () }
         when :l { $type ~~ 'a'|'l' ?? ($path) !! () }
+        when :f { $type ~~ 'a'|'f' ?? ($path) !! () }
+        when :d { |($type ~~ 'a'|'d' and $depth > $mindepth ?? ($path) !! ()), |$path.dir>>.&find($depth + 1, :$type, :$mindepth) }
         default { say () }
     }
 }
@@ -280,3 +279,4 @@ sub splash($message = '')
   \(ﾐ  ⌒ ● ⌒  ﾐ)/  {@text[2..*].join}
     ");
 }
+
