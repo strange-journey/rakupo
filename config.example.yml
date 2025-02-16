@@ -13,7 +13,7 @@ authelia_subject: "reset your password!"
 duo_api_hostname: api-xxxxxxxx.duosecurity.com
 duo_api_integration_key: AAAAAAAAAAAAAAAAAAAA
 
-lets-encrypt-email: webmaster@example.com
+lets_encrypt_email: webmaster@example.com
 
 ldap_base_dn: dc=example,dc=com
 

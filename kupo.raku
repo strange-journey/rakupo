@@ -1,55 +1,52 @@
 #!/usr/bin/env raku
-constant $moogle = '
-        ♥
-     /\__\__/\
-    /         \
-  \(ﾐ  ⌒ ● ⌒  ﾐ)/
-';
+#       ♥
+#    /\__\__/\
+#   /         \
+# \(ﾐ  ⌒ ● ⌒  ﾐ)/
 
-constant $default_config_file = 'config.yml';
-constant $default_compose_file = 'docker-compose.yml';
-constant $default_compose_prod_file = 'docker-compose.production.yml';
+constant $default-config-file = 'config.yml';
+constant $default-compose-file = 'docker-compose.yml';
+constant $default-compose-prod-file = 'docker-compose.production.yml';
 
 my %config;
 
 proto sub MAIN(|) {
-    load_config;
-    say $moogle;
+    load-config;
     return {*};
 }
 
 sub GENERATE-USAGE(&main, |capture) {
-    say $moogle;
+    splash "i'm here to help, kupo!";
     &*GENERATE-USAGE(&main, |capture)
 }
                
 multi sub MAIN('deploy',
     *@containers,
 ) {
-    @containers = validate_containers(@containers);
+    splash "deploying {@containers ?? @containers.elems !! 'all'} container{@containers.elems == 1 ?? '' !! 's'}, kupo!";
+    @containers = validate-containers(@containers);
     
     deploy %config<deploy_path><>.IO, @containers;
-    up %config<deploy_path><>.IO.add($default_compose_prod_file), @containers;
+    up %config<deploy_path><>.IO.add($default-compose-prod-file), @containers;
 }
 
 multi sub MAIN('up',
     *@containers,
 ) {
-    up %config<deploy_path><>.IO.add($default_compose_prod_file), validate_containers(@containers);
+    splash "bringing up {@containers ?? @containers.elems !! 'all'} container{@containers.elems == 1 ?? '' !! 's'}, kupo!";
+    up %config<deploy_path><>.IO.add($default-compose-prod-file), validate-containers(@containers);
 }
 
 multi sub MAIN('down',
     *@containers,
 ) {
-    down %config<deploy_path><>.IO.add($default_compose_prod_file), validate_containers(@containers);
+    splash "bringing down {@containers ?? @containers.elems !! 'all'} container{@containers.elems == 1 ?? '' !! 's'}, kupo!";
+    down %config<deploy_path><>.IO.add($default-compose-prod-file), validate-containers(@containers);
 }
 
 multi sub MAIN('log',
     Str $container
-) {
-    say 'hi!';
-    say find('./etc');
-}
+) { }
 
 sub deploy(IO() $deploy_path, @containers)
 {
@@ -58,53 +55,53 @@ sub deploy(IO() $deploy_path, @containers)
     if $deploy_path !~~ :d { die 'invalid deploy path specified!'; }
     
     # setup containers and build hash of methods to override compose file
-    my %setup_container_compose = @containers>>.&setup_container;
+    my %setup-container-compose = @containers>>.&setup-container;
 
     # create data symlink
-    my $data_symlink = $deploy_path.add('data');
-    unlink $data_symlink if $data_symlink ~~ :l;
-    symlink %config<data_path>, $data_symlink;
+    my $data-symlink = $deploy_path.add('data');
+    unlink $data-symlink if $data-symlink ~~ :l;
+    symlink %config<data_path>, $data-symlink;
 
     # deploy etc directory
     if './etc'.IO ~~ :d {
-        copy_tree './etc', $deploy_path;
-        find($deploy_path.add('etc'), :type('f'))>>.&substitute_config_tokens;
+        copy-tree './etc', $deploy_path;
+        find($deploy_path.add('etc'), :type('f'))>>.&substitute-config-tokens;
     }
 
     # deploy images needed locally
-    copy_tree './images', $deploy_path if './images'.IO ~~ :d;
+    copy-tree './images', $deploy_path if './images'.IO ~~ :d;
     # generate the production docker compose file
-    my $compose = load-yaml($default_compose_file.IO.slurp);
+    my $compose = load-yaml($default-compose-file.IO.slurp);
     for $compose<services>.kv -> $key, $service {
-        $compose<services>{$key} = %setup_container_compose{$key}($service);
+        $compose<services>{$key} = %setup-container-compose{$key}($service);
             
         if $compose<services>{$key}<volumes>:exists {
             for $compose<services>{$key}<volumes><> {
                 when Str {
                     my $volume = $_.split(':');
-                    $_ = (slip fix_relative_path($volume[0]).Str, $volume[1..*]).join(':');
+                    $_ = (slip fix-relative-path($volume[0]).Str, $volume[1..*]).join(':');
                 }
                 when Hash {
-                    if $_<source>:exists { $_<source> = fix_relative_path($_<source>).Str; }
+                    if $_<source>:exists { $_<source> = fix-relative-path($_<source>).Str; }
                 };
             }
         }
     }
 
     # create any missing secrets
-    my $secrets_path = $deploy_path.add('secrets');
-    mkdir $secrets_path if $secrets_path !~~ :d;
+    my $secrets-path = $deploy_path.add('secrets');
+    mkdir $secrets-path if $secrets-path !~~ :d;
     for $compose<secrets>.kv -> $key, $secret {
-        my $secret_path = $secrets_path.add($key);
-        if $secret_path !~~ :f {
-            $secret_path.spurt: ('a'..'z', 'A'..'Z', 0..9).flat.roll(64).join;
-            $secret_path.chmod: 0o600;
+        my $secret-path = $secrets-path.add($key);
+        if $secret-path !~~ :f {
+            $secret-path.spurt: ('a'..'z', 'A'..'Z', 0..9).flat.roll(64).join;
+            $secret-path.chmod: 0o600;
         }
-        $compose<secrets>{$key}<file> = $secret_path.resolve.Str;
+        $compose<secrets>{$key}<file> = $secret-path.resolve.Str;
     }
 
-    $deploy_path.add($default_compose_prod_file).spurt: save-yaml($compose);
-    find($deploy_path)>>.&{ say "chowning $_ with {%config<uid>}:{%config<gid>}"; $_.chown(:uid(%config<uid>) :gid(%config<gid>)) };
+    $deploy_path.add($default-compose-prod-file).spurt: save-yaml($compose);
+    find($deploy_path)>>.&{ $_.chown(:uid(%config<uid>) :gid(%config<gid>)) };
 
     my $proc = run <docker network ls --format {{.Name}}>, :out;
     for $compose<networks> (-) $proc.out.slurp(:close).lines {
@@ -112,34 +109,34 @@ sub deploy(IO() $deploy_path, @containers)
     }
 }
 
-sub up(IO() $compose_path, @containers) {
-    my $compose_cmd = <<docker compose -f {$compose_path.resolve}>>;
+sub up(IO() $compose-path, @containers) {
+    my $compose-cmd = <<docker compose -f {$compose-path.resolve}>>;
     for @containers {
         # TODO: optionally recycle with --force-recreate
-        run <<$compose_cmd build $_>>;
-        run <<$compose_cmd up --no-deps --remove-orphans -d $_>>;
+        run <<$compose-cmd build $_>>;
+        run <<$compose-cmd up --no-deps --remove-orphans -d $_>>;
     }
 }
 
-sub down(IO() $compose_path, @containers) {
-    run <<docker compose -f {$compose_path.resolve} rm -svf {@containers.join(' ')}>>
+sub down(IO() $compose-path, @containers) {
+    run <<docker compose -f {$compose-path.resolve} rm -svf {@containers.join(' ')}>>
 }
 
-sub validate_containers(*@containers) {
+sub validate-containers(*@containers) {
     my $proc = run <docker compose config --services>, :out;
-    my @all_containers = $proc.out.slurp(:close).lines;
-    if @containers (-) @all_containers { die 'invalid containers specified!'; }
-    @containers || @all_containers
+    my @all-containers = $proc.out.slurp(:close).lines;
+    if @containers (-) @all-containers { die 'invalid containers specified!'; }
+    @containers || @all-containers
 }
 
-sub fix_relative_path(IO() $path, IO() :$base = %config<deploy_path>.IO --> IO::Path) {
+sub fix-relative-path(IO() $path, IO() :$base = %config<deploy_path>.IO --> IO::Path) {
     ($path ~~ /^\.\.?(\/+.*)?$/ ?? $base.add($path) !! $path).resolve;
 }
 
-sub setup_container($container) {
+sub setup-container($container) {
     say "setting up container $container";
     given $container {
-        sub add_var(*@args, IO() :$varpath = %config<deploy_path>.IO.add('var')) {
+        sub add-var(*@args, IO() :$varpath = %config<deploy_path>.IO.add('var')) {
             for %(@args).kv -> $path, $type {
                 given $type {
                     when 'd' { mkdir $varpath.add($path); }
@@ -150,16 +147,16 @@ sub setup_container($container) {
         }
         
         when 'postgres' || 'redis' || 'diun' || 'lldap' {
-            add_var <<"$_/data" d>>;
+            add-var <<"$_/data" d>>;
         }
         
-        when 'traefik' { add_var <<"$_/acme.json" f>>; }
-        when 'rutorrent' { add_var <<"$_/data" d "$_/passwd" d>>; }
-        when 'jellyfin' { add_var <<"$_/config" d "$_/cache" d>>; }
+        when 'traefik' { add-var <<"$_/acme.json" f>>; }
+        when 'rutorrent' { add-var <<"$_/data" d "$_/passwd" d>>; }
+        when 'jellyfin' { add-var <<"$_/config" d "$_/cache" d>>; }
         
         # TODO: authelia
         
-        # TODO: file_browser
+        # TODO: file-browser
         # for filebrowser proxy auth, database.db must be edited after the container first initializes it.
         # the "header": "Remote-User" pair needs to be added to config.auther in the bolt store, and
         # the "authMethod": "proxy" pair needs to be added to config.settings
@@ -167,13 +164,12 @@ sub setup_container($container) {
         # is it possible to spin up a docker container of filebrowser to generate a database.db with the existing config,
         # then modify in raku to get a working db (add users, fix proxy auth)?
 
-        default { add_var <<"$_" d>> }
+        default { add-var <<"$_" d>> }
     }
 
     my $uid = %config<uid>;
     my $gid = %config<gid>;
 
-    say $container;
     do given $container {
         sub cadd($service, *@args) { for %(@args).kv -> $key, $item { $service{$key} = |($service{$key} || ()), $item; } }
         sub cset($service, *@args) { for %(@args).kv -> $key, $item { $service{$key} = $item; } }
@@ -204,7 +200,7 @@ sub setup_container($container) {
     }
 };
 
-sub create_vars(*@args, IO() :$varpath = %config<deploy_path>.IO.add('var')) {
+sub create-vars(*@args, IO() :$varpath = %config<deploy_path>.IO.add('var')) {
     for %(@args).kv -> $path, $type {
         given $type {
             when 'd' { mkdir $varpath.add($path); }
@@ -214,12 +210,12 @@ sub create_vars(*@args, IO() :$varpath = %config<deploy_path>.IO.add('var')) {
     }
 }
 
-sub load_config(:$config_file = $default_config_file) {
+sub load-config(:$config-file = $default-config-file) {
     use YAMLish;
-    %config = load-yaml($config_file.IO.slurp);
+    %config = load-yaml($config-file.IO.slurp);
 }
 
-sub substitute_config_tokens(IO() $path) {
+sub substitute-config-tokens(IO() $path) {
     try {
         my $text = $path.IO.slurp;
         say "substituting tokens in $path";
@@ -230,8 +226,7 @@ sub substitute_config_tokens(IO() $path) {
     }
 }
 
-sub copy_tree(IO() $source, IO() $dest) {
-    say "copying $source to $dest";
+sub copy-tree(IO() $source, IO() $dest) {
     if $source ~~ :f and $dest !~~ :d {
         $source.copy($dest);
         return;
@@ -250,7 +245,7 @@ sub copy_tree(IO() $source, IO() $dest) {
                     my $dir = $dest.add($subpath);
                     mkdir $dir if $dir !~~ :d;
                 }
-                default { copy_tree $from, $dest.add($subpath.dirname); }
+                default { copy-tree $from, $dest.add($subpath.dirname); }
             }
         }
     }
@@ -265,7 +260,7 @@ sub find(IO() $path, Str :$type = 'a') {
     }
 }
 
-sub check_sudo()
+sub check-sudo()
 {
     my $proc = run <docker ps>;
     if !$proc {
@@ -273,4 +268,15 @@ sub check_sudo()
             say 'run sudo';
         }
     }
+}
+
+sub splash($message = '')
+{
+    my @text = $message.comb.rotor(40, :partial)>>.join;
+    $*ERR.say(Q:c"
+        ♥
+     /\__\__/\     {@text[0] || ''}
+    /         \    {@text[1] || ''}
+  \(ﾐ  ⌒ ● ⌒  ﾐ)/  {@text[2..*].join}
+    ");
 }

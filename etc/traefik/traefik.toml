@@ -46,7 +46,7 @@
     address = ":22000/udp"
 
 [certificatesResolvers.lets-encrypt.acme]
-  email = "<<lets-encrypt-email>>"
+  email = "<<lets_encrypt_email>>"
   storage = "acme.json"
   [certificatesResolvers.lets-encrypt.acme.dnsChallenge]
     provider = "digitalocean"
