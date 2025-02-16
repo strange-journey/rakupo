@@ -1,0 +1,20 @@
+domain: example.com
+uid: 1000
+gid: 1000
+deploy_path: /srv
+data_path: /data
+
+authelia_smtp_host: smtp.example.com
+authelia_smtp_port: 465
+authelia_smtp_username: webmaster@example.com
+authelia_sender: webmaster <webmaster@example.com>
+authelia_subject: "reset your password!"
+
+duo_api_hostname: api-xxxxxxxx.duosecurity.com
+duo_api_integration_key: AAAAAAAAAAAAAAAAAAAA
+
+lets-encrypt-email: webmaster@example.com
+
+ldap_base_dn: dc=example,dc=com
+
+diun_webhook_url: "https://discord.com/api/webhooks/..."
