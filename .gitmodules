@@ -1,0 +1,3 @@
+[submodule "kupo-utils"]
+	path = images/kupo-utils
+	url = git@github.com:strange-journey/kupo-utils.git

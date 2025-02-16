@@ -46,7 +46,10 @@ multi sub MAIN('down',
 
 multi sub MAIN('log',
     Str $container
-) { }
+) {
+    say 'hi!';
+    say find('./etc');
+}
 
 sub deploy(IO() $deploy_path, @containers)
 {
@@ -68,6 +71,8 @@ sub deploy(IO() $deploy_path, @containers)
         find($deploy_path.add('etc'), :type('f'))>>.&substitute_config_tokens;
     }
 
+    # deploy images needed locally
+    copy_tree './images', $deploy_path if './images'.IO ~~ :d;
     # generate the production docker compose file
     my $compose = load-yaml($default_compose_file.IO.slurp);
     for $compose<services>.kv -> $key, $service {
@@ -99,7 +104,7 @@ sub deploy(IO() $deploy_path, @containers)
     }
 
     $deploy_path.add($default_compose_prod_file).spurt: save-yaml($compose);
-    find($deploy_path)>>.&{ $_.chown(:uid(%config<uid>) :gid(%config<gid>)) };
+    find($deploy_path)>>.&{ say "chowning $_ with {%config<uid>}:{%config<gid>}"; $_.chown(:uid(%config<uid>) :gid(%config<gid>)) };
 
     my $proc = run <docker network ls --format {{.Name}}>, :out;
     for $compose<networks> (-) $proc.out.slurp(:close).lines {
@@ -133,21 +138,24 @@ sub fix_relative_path(IO() $path, IO() :$base = %config<deploy_path>.IO --> IO::
 
 sub setup_container($container) {
     say "setting up container $container";
-    
-    sub add_env($service, $env) {
-        if not $service<environment>:exists { $service<environment> = (); }
-        $service<environment> = |$service<environment>, |($env);
-        $service
-    }
-
     given $container {
-        when 'postgres' || 'redis' || 'diun' || 'lldap' {
-            create_vars <<"$_/data" d>>;
+        sub add_var(*@args, IO() :$varpath = %config<deploy_path>.IO.add('var')) {
+            for %(@args).kv -> $path, $type {
+                given $type {
+                    when 'd' { mkdir $varpath.add($path); }
+                    when 'f' { mkdir $varpath.add($path.IO.parent); $varpath.add($path).open(:a).close; }
+                    default { die "unknown var type $type" }
+                }
+            }
         }
         
-        when 'traefik' { create_vars <<"$_/acme.json" f>>; }
-        when 'rutorrent' { create_vars <<"$_/data" d "$_/passwd" d>>; }
-        when 'jellyfin' { create_vars <<"$_/config" d "$_/cache" d>>; }
+        when 'postgres' || 'redis' || 'diun' || 'lldap' {
+            add_var <<"$_/data" d>>;
+        }
+        
+        when 'traefik' { add_var <<"$_/acme.json" f>>; }
+        when 'rutorrent' { add_var <<"$_/data" d "$_/passwd" d>>; }
+        when 'jellyfin' { add_var <<"$_/config" d "$_/cache" d>>; }
         
         # TODO: authelia
         
@@ -159,28 +167,40 @@ sub setup_container($container) {
         # is it possible to spin up a docker container of filebrowser to generate a database.db with the existing config,
         # then modify in raku to get a working db (add users, fix proxy auth)?
 
-        default { create_vars <<"$_" d>> }
+        default { add_var <<"$_" d>> }
     }
 
     my $uid = %config<uid>;
     my $gid = %config<gid>;
+
+    say $container;
     do given $container {
+        sub cadd($service, *@args) { for %(@args).kv -> $key, $item { $service{$key} = |($service{$key} || ()), $item; } }
+        sub cset($service, *@args) { for %(@args).kv -> $key, $item { $service{$key} = $item; } }
+
         when 'mariadb' || 'rutorrent' || 'syncthing' || 'shoko' {
             $container => {
-                add_env($_, "PUID=$uid");
-                add_env($_, "PGID=$gid")
+                cadd $_, <<environment "PUID=$uid">>;
+                cadd $_, <<environment "PGID=$gid">>;
+                $_
             }
         }
 
         when 'lldap' {
             $container => {
-                add_env($_, "UID=$uid");
-                add_env($_, "GID=$gid")
+                cadd $_, <<environment "UID=$uid">>;
+                cadd $_, <<environment "GID=$gid">>;
+                $_
             }
         }
         
         # TODO: add diun labels to all services here
-        default { $container => { $_ } }
+        default {
+            $container => {
+                cset $_, <<user "$uid:$gid">>;
+                $_
+            }
+        }
     }
 };
 
@@ -197,21 +217,21 @@ sub create_vars(*@args, IO() :$varpath = %config<deploy_path>.IO.add('var')) {
 sub load_config(:$config_file = $default_config_file) {
     use YAMLish;
     %config = load-yaml($config_file.IO.slurp);
-    # for %config_envs.kv -> $var, $key {
-    #     if %*ENV{$var}:exists { %config{$key} = %*ENV{$var}; }
-    #     %*ENV{$var} = %config{$key};
-    # }
 }
 
 sub substitute_config_tokens(IO() $path) {
-    my $text = $path.IO.slurp;
-    for %config.kv -> $key, $value {
-        $text ~~ s:g/\<\<\s*$key\s*\>\>/$value/;
+    try {
+        my $text = $path.IO.slurp;
+        say "substituting tokens in $path";
+        for %config.kv -> $key, $value {
+            $text ~~ s:g/\<\<\s*$key\s*\>\>/$value/;
+        }
+        $path.IO.spurt: $text;
     }
-    $path.IO.spurt: $text;
 }
 
 sub copy_tree(IO() $source, IO() $dest) {
+    say "copying $source to $dest";
     if $source ~~ :f and $dest !~~ :d {
         $source.copy($dest);
         return;
@@ -224,8 +244,14 @@ sub copy_tree(IO() $source, IO() $dest) {
 
     if $source ~~ :d and $dest ~~ :d {
         for find $source -> $from {
-            if $from ~~ :d { mkdir $dest.add($from.basename); }
-            else { copy_tree $from, $dest.add($from.resolve.relative($source.parent).IO.dirname); }
+            my $subpath = $from.resolve.relative($source.parent).IO;
+            given $from {
+                when :d {
+                    my $dir = $dest.add($subpath);
+                    mkdir $dir if $dir !~~ :d;
+                }
+                default { copy_tree $from, $dest.add($subpath.dirname); }
+            }
         }
     }
 }

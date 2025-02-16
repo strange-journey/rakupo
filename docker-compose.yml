@@ -85,7 +85,7 @@ services:
     restart: unless-stopped
   
   lldap:
-    image: nitnelave/lldap:v0.6-1-alpine
+    image: nitnelave/lldap:v0.6.1-alpine
     container_name: lldap
     command: run --config-file /lldap_config.toml
     environment:
@@ -206,12 +206,11 @@ services:
   kupo-utils:
     image: moogle/kupo-utils
     container_name: kupo-utils
-    build: ./kupo-utils
+    build: ./images/kupo-utils
     environment:
       - PYRO_RTORRENT_RC=/rutorrent/rtorrent/.rtorrent.rc
       - PYRO_SCGI_URL=http://rutorrent:8000
     networks:
-      # TODO: make new rtorrent network?
       - rtorrent
     volumes:
       - "./var/rutorrent/data:/rutorrent:ro"
@@ -246,6 +245,7 @@ services:
       - "diun.include_tags=^[0-9]+\\.[0.9]+-[0-9]+\\.[0.9]+\\.[0-9]+-[0-9]+\\.[0.9]+\\.[0-9]+$$"
     networks:
       - public
+      - rtorrent
     volumes:
       - "./var/rutorrent/data:/data"
       - "./data/media/downloads:/downloads"
@@ -353,4 +353,6 @@ networks:
   redis:
     external: true
   logging:
+    external: true
+  rtorrent:
     external: true
