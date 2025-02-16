@@ -1,7 +1,6 @@
 services:
   traefik:
     image: traefik:3.3
-    container_name: traefik
     environment:
       - DO_AUTH_TOKEN_FILE=/run/secrets/digitalocean
     labels:
@@ -36,7 +35,6 @@ services:
 
   socket-proxy:
     image: tecnativa/docker-socket-proxy:0.3
-    container_name: socket-proxy
     environment:
       - CONTAINERS=1
       - IMAGES=1
@@ -51,7 +49,6 @@ services:
   
   postgres:
     image: postgres:17.3-alpine
-    container_name: postgres
     environment:
       - POSTGRES_PASSWORD_FILE=/run/secrets/postgres-pass
     labels:
@@ -69,7 +66,6 @@ services:
     
   redis:
     image: redis:7.4.2-alpine
-    container_name: redis
     command: /init-redis.sh
     labels:
       - "diun.enable=true"
@@ -86,7 +82,6 @@ services:
   
   lldap:
     image: nitnelave/lldap:v0.6.1-alpine
-    container_name: lldap
     command: run --config-file /lldap_config.toml
     environment:
       - LLDAP_JWT_SECRET_FILE=/run/secrets/lldap-jwt-secret
@@ -110,7 +105,6 @@ services:
   
   static:
     image: nginxinc/nginx-unprivileged:1.27-alpine
-    container_name: static
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.static.rule=Host(`<<domain>>`) && (PathPrefix(`/static/`) || Path(`/favicon.ico`))"
@@ -130,7 +124,6 @@ services:
 
   authelia:
     image: authelia/authelia:4.38
-    container_name: authelia
     environment:
       - AUTHELIA_JWT_SECRET_FILE=/run/secrets/authelia-jwt-secret
       - AUTHELIA_SESSION_SECRET_FILE=/run/secrets/authelia-session-secret
@@ -171,7 +164,6 @@ services:
   
   filebrowser:
     image: filebrowser/filebrowser:v2.32.0
-    container_name: filebrowser
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.filebrowser.rule=Host(`file.<<domain>>`)"
@@ -188,7 +180,6 @@ services:
   
   diun:
     image: crazymax/diun:4.29.0
-    container_name: diun
     command: serve
     environment:
       - "LOG_LEVEL=info"
@@ -205,7 +196,6 @@ services:
       
   kupo-utils:
     image: moogle/kupo-utils
-    container_name: kupo-utils
     build: ./images/kupo-utils
     environment:
       - PYRO_RTORRENT_RC=/rutorrent/rtorrent/.rtorrent.rc
@@ -220,7 +210,6 @@ services:
   
   rutorrent:
     image: crazymax/rtorrent-rutorrent:5.1.5-7.2
-    container_name: rutorrent
     ulimits:
       nproc: 65535
       nofile:
@@ -255,7 +244,6 @@ services:
   
   jellyfin:
     image: jellyfin/jellyfin:10.10.3
-    container_name: jellyfin
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.jellyfin.rule=Host(`watch.<<domain>>`)"
@@ -273,7 +261,6 @@ services:
   # TODO: update this, and get authentication working instead of home-ip
   shoko:
     image: shokoanime/server:v4.2.2
-    container_name: shoko
     environment:
       - AVDUMP_MONO=true
     labels:
@@ -294,7 +281,6 @@ services:
 
   syncthing:
     image: syncthing/syncthing:1.27.0
-    container_name: syncthing
     hostname: <<domain>>
     labels:
       - "traefik.enable=true"
