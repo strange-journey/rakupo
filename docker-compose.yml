@@ -1,0 +1,356 @@
+services:
+  traefik:
+    image: traefik:3.3
+    container_name: traefik
+    environment:
+      - DO_AUTH_TOKEN_FILE=/run/secrets/digitalocean
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.static.errors.status=403,404,500-509"
+      - "traefik.http.middlewares.static.errors.service=static@docker"
+      - "traefik.http.middlewares.static.errors.query=/static/errors/{status}.html"
+      - "traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/verify?rd=https://login.<<domain>>/"
+      - "traefik.http.middlewares.authelia.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.authelia.forwardauth.authResponseHeaders=Remote-User,Remote-Groups,Remote-Name,Remote-Email"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.<<domain>>`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.middlewares=authelia@docker"
+      - "diun.enable=true"
+      - "diun.include_tags=^[0-9]+\\.[0.9]+(\\.[0-9]+)?$$"
+    secrets:
+      - digitalocean
+    ports:
+      - "80:80"
+      - "443:443"
+      - "50013:50013"
+      - "50013:50013/udp"
+      - "6881:6881/udp"
+    networks:
+      - public
+      - socket-proxy
+    volumes:
+      - ./etc/traefik/dynamic.toml:/etc/traefik/dynamic.toml:ro
+      - ./etc/traefik/traefik.toml:/etc/traefik/traefik.toml:ro
+      - ./var/traefik/acme.json:/acme.json
+    restart: unless-stopped
+
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3
+    container_name: socket-proxy
+    environment:
+      - CONTAINERS=1
+      - IMAGES=1
+    labels:
+      - "diun.enable=true"
+      - "diun.include_tags=^[0-9]+\\.[0.9]+(\\.[0-9]+)?$$"
+    networks:
+      - socket-proxy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+  
+  postgres:
+    image: postgres:17.3-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres-pass
+    labels:
+      - "diun.enable=true"
+      - "diun.include_tags=^[0-9]+\\.[0.9]+-alpine$$"
+    secrets:
+      - postgres-pass
+      - authelia-postgres-pass
+    networks:
+      - postgres
+    volumes:
+      - ./etc/postgres/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d:ro
+      - ./var/postgres/data:/var/lib/postgresql/data
+    restart: unless-stopped
+    
+  redis:
+    image: redis:7.4.2-alpine
+    container_name: redis
+    command: /init-redis.sh
+    labels:
+      - "diun.enable=true"
+      - "diun.include_tags=^[0-9]+\\.[0.9]+\\.[0-9]+-alpine$$"
+    secrets:
+      - redis-pass
+    networks:
+      - redis
+    volumes:
+      - ./var/redis/data:/data
+      - ./etc/redis/redis.conf:/usr/local/etc/redis/redis.conf
+      - ./etc/redis/init-redis.sh:/init-redis.sh
+    restart: unless-stopped
+  
+  lldap:
+    image: nitnelave/lldap:v0.6-1-alpine
+    container_name: lldap
+    command: run --config-file /lldap_config.toml
+    environment:
+      - LLDAP_JWT_SECRET_FILE=/run/secrets/lldap-jwt-secret
+      - LLDAP_LDAP_USER_PASS_FILE=/run/secrets/lldap-user-pass
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.lldap.rule=Host(`ldap.<<domain>>`)"
+      - "traefik.http.routers.lldap.middlewares=authelia@docker"
+      - "traefik.http.services.lldap.loadbalancer.server.port=17170"
+      - "diun.enable=true"
+      - "diun.include_tags=^[0-9]+\\.[0.9]+(\\.[0-9]+)?-alpine$$"
+    secrets:
+      - lldap-jwt-secret
+      - lldap-user-pass
+    networks:
+      - public
+    volumes:
+      - ./var/lldap/data:/data
+      - ./etc/lldap/lldap_config.toml:/lldap_config.toml
+    restart: unless-stopped
+  
+  static:
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    container_name: static
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.static.rule=Host(`<<domain>>`) && (PathPrefix(`/static/`) || Path(`/favicon.ico`))"
+      - "traefik.http.services.static.loadbalancer.server.port=8080"
+      - "traefik.http.routers.catch-all.rule=HostRegexp(`^.+$`)"
+      - "traefik.http.routers.catch-all.priority=1"
+      - "traefik.http.routers.favicon.rule=Path(`/favicon.ico`)"
+      - "traefik.http.routers.favicon.priority=99999"
+      - "diun.enable=true"
+      - "diun.include_tags=^[0-9]+\\.[0.9]+\\.[0-9]+-alpine$$"
+    networks:
+      - public
+    volumes:
+      - ./etc/static/conf.d:/etc/nginx/conf.d
+      - ./etc/static/html:/usr/share/nginx/html/static:ro
+    restart: unless-stopped
+
+  authelia:
+    image: authelia/authelia:4.38
+    container_name: authelia
+    environment:
+      - AUTHELIA_JWT_SECRET_FILE=/run/secrets/authelia-jwt-secret
+      - AUTHELIA_SESSION_SECRET_FILE=/run/secrets/authelia-session-secret
+      - AUTHELIA_SESSION_REDIS_PASSWORD_FILE=/run/secrets/redis-pass
+      - AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE=/run/secrets/authelia-postgres-pass
+      - AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE=/run/secrets/authelia-storage-key
+      - AUTHELIA_DUO_API_SECRET_KEY_FILE=/run/secrets/duo-api-secret
+      - AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE=/run/secrets/authelia-smtp-pass
+      - AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE=/run/secrets/authelia-oidc-hmac-secret
+      - AUTHELIA_IDENTITY_PROVIDERS_OIDC_ISSUER_PRIVATE_KEY_FILE=/run/secrets/authelia-oidc-issuer-private-key
+      - AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE=/run/secrets/lldap-user-pass
+      - AUTHELIA_DEFAULT_REDIRECTION_URL=https://<<domain>>
+      - AUTHELIA_SESSION_DOMAIN=<<domain>>
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.authelia.rule=Host(`login.<<domain>>`)"
+      - "diun.enable=true"
+      - "diun.include_tags=^[0-9]+\\.[0.9]+\\.[0-9]+$$"
+    secrets:
+      - lldap-user-pass
+      - authelia-jwt-secret
+      - authelia-session-secret
+      - authelia-postgres-pass
+      - authelia-smtp-pass
+      - authelia-storage-key
+      - authelia-oidc-hmac-secret
+      - authelia-oidc-issuer-private-key
+      - duo-api-secret
+      - redis-pass
+    networks:
+      - public
+      - postgres
+      - redis
+    volumes:
+      - ./etc/authelia/configuration.yml:/config/configuration.yml
+      - ./var/authelia/users_database.yml:/config/users_database.yml
+    restart: unless-stopped
+  
+  filebrowser:
+    image: filebrowser/filebrowser:v2.32.0
+    container_name: filebrowser
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.filebrowser.rule=Host(`file.<<domain>>`)"
+      - "traefik.http.routers.filebrowser.middlewares=authelia@docker"
+      - "diun.enable=true"
+      - "diun.include_tags=^v[0-9]+\\.[0.9]+\\.[0-9]+$$"
+    networks:
+      - public
+    volumes:
+      - ./data:/data
+      - ./etc/filebrowser/filebrowser.json:/.filebrowser.json
+      - ./var/filebrowser/database.db:/database.db
+    restart: unless-stopped
+  
+  diun:
+    image: crazymax/diun:4.29.0
+    container_name: diun
+    command: serve
+    environment:
+      - "LOG_LEVEL=info"
+      - "LOG_JSON=false"
+    labels:
+      - "diun.enable=true"
+      - "diun.include_tags=^[0-9]+\\.[0.9]+\\.[0-9]+$$"
+    networks:
+      - socket-proxy
+    volumes:
+      - "./var/diun/data:/data"
+      - "./etc/diun/diun.yml:/diun.yml:ro"
+    restart: unless-stopped
+      
+  kupo-utils:
+    image: moogle/kupo-utils
+    container_name: kupo-utils
+    build: ./kupo-utils
+    environment:
+      - PYRO_RTORRENT_RC=/rutorrent/rtorrent/.rtorrent.rc
+      - PYRO_SCGI_URL=http://rutorrent:8000
+    networks:
+      # TODO: make new rtorrent network?
+      - rtorrent
+    volumes:
+      - "./var/rutorrent/data:/rutorrent:ro"
+      - "./data/media/import/shoko:/shoko"
+      - "./data/media/library/anime_movies:/shoko_movie"
+    restart: unless-stopped
+  
+  rutorrent:
+    image: crazymax/rtorrent-rutorrent:5.1.5-7.2
+    container_name: rutorrent
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 32000
+        hard: 40000
+    environment:
+      # TODO: webdav/filewatcher setup to discord notifications?
+      - RT_INC_PORT=50013
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.rutorrent.rule=Host(`torrent.<<domain>>`)"
+      - "traefik.http.routers.rutorrent.middlewares=authelia@docker"
+      - "traefik.http.services.rutorrent.loadbalancer.server.port=8080"
+      - "traefik.tcp.routers.rutorrent.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.rutorrent.entrypoints=torrent-tcp"
+      - "traefik.tcp.services.rutorrent.loadbalancer.server.port=50013"
+      - "traefik.udp.routers.rutorrent.entrypoints=torrent-udp"
+      - "traefik.udp.services.rutorrent.loadbalancer.server.port=50013"
+      - "traefik.udp.routers.rutorrent-dht.entrypoints=torrent-dht"
+      - "traefik.udp.services.rutorrent-dht.loadbalancer.server.port=6881"
+      - "diun.enable=true"
+      - "diun.include_tags=^[0-9]+\\.[0.9]+-[0-9]+\\.[0.9]+\\.[0-9]+-[0-9]+\\.[0.9]+\\.[0-9]+$$"
+    networks:
+      - public
+    volumes:
+      - "./var/rutorrent/data:/data"
+      - "./data/media/downloads:/downloads"
+      - "./data/media/import/shoko:/shoko"
+      - "./var/rutorrent/passwd:/passwd"
+    restart: unless-stopped
+  
+  jellyfin:
+    image: jellyfin/jellyfin:10.10.3
+    container_name: jellyfin
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jellyfin.rule=Host(`watch.<<domain>>`)"
+      - "diun.enable=true"
+      - "diun.include_tags=^[0-9]+\\.[0.9]+\\.[0-9]+$$"
+    networks:
+      - public
+    volumes:
+      - ./var/jellyfin/config:/config
+      - ./var/jellyfin/cache:/cache
+      - ./data/media:/data/media
+      - ./data/media/downloads:/downloads
+    restart: unless-stopped
+  
+  # TODO: update this, and get authentication working instead of home-ip
+  shoko:
+    image: shokoanime/server:v4.2.2
+    container_name: shoko
+    environment:
+      - AVDUMP_MONO=true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.shoko.rule=Host(`shoko.<<domain>>`)"
+      # - "traefik.http.routers.shoko.middlewares=home-ip@docker"
+      - "traefik.http.routers.shoko.entrypoints=web"
+      - "traefik.http.routers.shoko.priority=99999"
+      - "diun.enable=true"
+      - "diun.include_tags=^v[0-9]+\\.[0.9]+\\.[0-9]+$$"
+    networks:
+      - public
+    volumes:
+      - "./var/shoko:/home/shoko/.shoko"
+      - "./data/media:/data/media"
+      - ./data/media/downloads:/downloads
+    restart: unless-stopped
+
+  syncthing:
+    image: syncthing/syncthing:1.27.0
+    container_name: syncthing
+    hostname: <<domain>>
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.syncthing.rule=Host(`sync.<<domain>>`)"
+      - "traefik.http.routers.syncthing.middlewares=authelia@docker"
+      - "traefik.http.services.syncthing.loadbalancer.server.port=8384"
+      - "traefik.tcp.routers.syncthing.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.syncthing.entrypoints=sync-tcp"
+      - "traefik.tcp.services.syncthing.loadbalancer.server.port=22000"
+      - "traefik.udp.routers.syncthing.entrypoints=sync-udp"
+      - "traefik.udp.services.syncthing.loadbalancer.server.port=22000"
+      - "diun.enable=true"
+      - "diun.include_tags=^[0-9]+\\.[0.9]+\\.[0-9]+$$"
+    networks:
+      - public
+    volumes:
+      - "./data:/data"
+      - "./var/syncthing:/var/syncthing"
+    restart: unless-stopped
+  
+secrets:
+  digitalocean:
+      file: ''
+  postgres-pass:
+      file: ''
+  redis-pass:
+      file: ''
+  duo-api-secret:
+      file: ''
+  authelia-jwt-secret:
+      file: ''
+  authelia-session-secret:
+      file: ''
+  authelia-postgres-pass:
+      file: ''
+  authelia-smtp-pass:
+      file: ''
+  authelia-storage-key:
+      file: ''
+  authelia-oidc-hmac-secret:
+      file: ''
+  authelia-oidc-issuer-private-key:
+      file: ''
+  lldap-jwt-secret:
+      file: ''
+  lldap-user-pass:
+      file: ''
+
+networks:
+  public:
+    external: true
+  socket-proxy:
+    external: true
+  postgres:
+    external: true
+  redis:
+    external: true
+  logging:
+    external: true

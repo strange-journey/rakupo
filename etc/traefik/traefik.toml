@@ -1,0 +1,57 @@
+[global]
+  checkNewVersion = true
+  sendAnonymousUsage = false
+  
+[log]
+  level = "DEBUG"
+
+[api]
+  dashboard = true
+
+[metrics]
+  [metrics.prometheus]
+
+[entryPoints]
+  [entryPoints.web]
+    address = ":80"
+    
+    [entryPoints.web.http.redirections.entryPoint]
+      to = "websecure"
+      scheme = "https"
+      priority = 200
+  
+  [entryPoints.websecure]
+    address = ":443"
+    asDefault = true
+    
+    [entryPoints.websecure.http]
+      middlewares = ['static@docker']
+
+      [entryPoints.websecure.http.tls]
+        certResolver = "lets-encrypt"
+        [[entryPoints.websecure.http.tls.domains]]
+          main = "<<domain>>"
+          sans = ["*.<<domain>>"]
+  
+  [entryPoints.torrent-tcp]
+    address = ":50013"
+  [entryPoints.torrent-udp]
+    address = ":50013/udp"
+  [entryPoints.torrent-dht]
+    address = ":6881/udp"
+
+  [entryPoints.sync-tcp]
+    address = ":22000"
+  [entryPoints.sync-udp]
+    address = ":22000/udp"
+
+[certificatesResolvers.lets-encrypt.acme]
+  email = "<<lets-encrypt-email>>"
+  storage = "acme.json"
+  [certificatesResolvers.lets-encrypt.acme.dnsChallenge]
+    provider = "digitalocean"
+
+[providers.docker]
+  network = "public"
+  endpoint = "tcp://socket-proxy:2375"
+  exposedByDefault = false

@@ -1,0 +1,17 @@
+watch:
+  workers: 10
+  schedule: "0 0 * * *"
+  firstCheckNotif: false
+
+providers:
+  docker:
+    endpoint: "tcp://socket-proxy:2375"
+    watchStopped: true
+  
+notif:
+  discord:
+    webHookURL: "<<diun_webhook_url>>"
+    renderFields: true
+    timeout: 10s
+    templateBody: |
+      a new version for container {{ if .Entry.Image.HubLink }}[**{{ .Entry.Image }}**]({{ .Entry.Image.HubLink }}){{ else }}**{{ .Entry.Image }}**{{ end }} has just been released, kupo!
