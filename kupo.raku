@@ -171,7 +171,10 @@ sub setup-container($container, IO() :$var-path) {
             add-var "$_/data", 'd';
         }
         
-        when 'traefik' { add-var "$_/acme.json", 'f', 0o600; }
+        when 'traefik' {
+            add-var "$_/acme.json", 'f', 0o600;
+            add-var "$_/acme_dizzyrabbit.json", 'f', 0o600;
+        }
         when 'rutorrent' { add-vars <<"$_/data" d "$_/passwd" d>>; }
         when 'jellyfin' { add-vars <<"$_/config" d "$_/cache" d>>; }
         

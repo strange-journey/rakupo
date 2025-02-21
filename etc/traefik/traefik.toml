@@ -51,6 +51,12 @@
   [certificatesResolvers.lets-encrypt.acme.dnsChallenge]
     provider = "digitalocean"
 
+[certificatesResolvers.lets-encrypt-dizzyrabbit.acme]
+  email = "<<lets_encrypt_dizzyrabbit_email>>"
+  storage = "acme_dizzyrabbit.json"
+  [certificatesResolvers.lets-encrypt-dizzyrabbit.acme.dnsChallenge]
+    provider = "porkbun"
+
 [providers.docker]
   network = "public"
   endpoint = "tcp://socket-proxy:2375"

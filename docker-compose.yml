@@ -3,6 +3,8 @@ services:
     image: traefik:3.3
     environment:
       - DO_AUTH_TOKEN_FILE=/run/secrets/digitalocean
+      - PORKBUN_API_KEY=<<porkbun_api_key>>
+      - PORKBUN_SECRET_API_KEY_FILE=/run/secrets/porkbun-secret-api-key
     labels:
       - "traefik.enable=true"
       - "traefik.http.middlewares.static.errors.status=403,404,500-509"
@@ -18,6 +20,7 @@ services:
       - "diun.include_tags=^[0-9]+\\.[0.9]+(\\.[0-9]+)?$$"
     secrets:
       - digitalocean
+      - porkbun-secret-api-key
     ports:
       - "80:80"
       - "443:443"
@@ -31,6 +34,7 @@ services:
       - ./etc/traefik/dynamic.toml:/etc/traefik/dynamic.toml:ro
       - ./etc/traefik/traefik.toml:/etc/traefik/traefik.toml:ro
       - ./var/traefik/acme.json:/acme.json
+      - ./var/traefik/acme_dizzyrabbit.json:/acme_dizzyrabbit.json
     restart: unless-stopped
 
   socket-proxy:
@@ -120,6 +124,22 @@ services:
     volumes:
       - ./etc/static/conf.d:/etc/nginx/conf.d
       - ./etc/static/html:/usr/share/nginx/html/static:ro
+    restart: unless-stopped
+
+  static-dizzyrabbit:
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.static-dizzyrabbit.rule=Host(`<<domain_dizzyrabbit>>`)"
+      - "traefik.http.services.static-dizzyrabbit.loadbalancer.server.port=8080"
+      - "traefik.http.routers.favicon-dizzyrabbit.rule=Path(`/favicon.ico`)"
+      - "traefik.http.routers.favicon-dizzyrabbit.priority=99999"
+      - "traefik.http.routers.static-dizzyrabbit.tls.certResolver=lets-encrypt-dizzyrabbit"
+    networks:
+      - public
+    volumes:
+      - ./etc/static-dizzyrabbit/conf.d:/etc/nginx/conf.d
+      - ./etc/static-dizzyrabbit/html:/usr/share/nginx/html:ro
     restart: unless-stopped
 
   authelia:
@@ -327,6 +347,8 @@ secrets:
   lldap-jwt-secret:
       file: ''
   lldap-user-pass:
+      file: ''
+  porkbun-secret-api-key:
       file: ''
 
 networks:
